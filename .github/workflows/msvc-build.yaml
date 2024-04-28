@@ -1,0 +1,80 @@
+name: MSVC Build
+on:
+  - workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      boost_version: 1.85.0
+      BOOST_ROOT: ${{ github.workspace }}\deps\boost_1_85_0
+    steps:
+      - name: Add MsBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Checkout Weasel
+        uses: actions/checkout@v4
+        with:
+          repository: rime/weasel
+          submodules: recursive
+
+      - name: Configure build environment
+        shell: pwsh
+        run: |
+          $envfile = ".\env.bat"
+          $envcontent = @"
+            set WEASEL_ROOT=%CD%
+            set CMAKE_GENERATOR="Visual Studio 17 2022"
+            set BJAM_TOOLSET=msvc-14.3
+            set PLATFORM_TOOLSET=v143
+          "@
+          Set-Content -Path $envfile -Value $envcontent
+          cat $envfile
+
+      - name: Cache Boost
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BOOST_ROOT }}
+          key: ${{ runner.os }}-boost-${{ env.boost_version }}
+
+      - name: Install Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        shell: cmd
+        run: install_boost.bat
+
+      - name: Add Lua plugin to LibRime
+        shell: cmd
+        env:
+          RIME_PLUGINS: hchunhui/librime-lua@master
+        working-directory: librime
+        run: action-install-plugins-windows.bat
+
+      - name: Build LibRime
+        shell: cmd
+        run: build.bat librime
+
+      - name: Copy LibRime
+        shell: cmd
+        run: |
+          copy /Y librime\dist_x64\include\rime_*.h include\
+          copy /Y librime\dist_x64\lib\rime.lib lib64\
+          copy /Y librime\dist_x64\lib\rime.dll output\
+          copy /Y librime\dist_Win32\lib\rime.lib lib\
+          copy /Y librime\dist_Win32\lib\rime.dll output\Win32\
+
+      - name: Build Weasel
+        shell: cmd
+        run: build.bat hant installer
+
+      - name: Compress Debug Symbols
+        shell: pwsh
+        run: Compress-Archive -Path output\*.pdb -CompressionLevel Optimal -DestinationPath .\output\archives\symbols.zip
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Weasel
+          path: |
+            ./output/archives/weasel*.exe
+            ./output/archives/symbols.zip
+          if-no-files-found: error
